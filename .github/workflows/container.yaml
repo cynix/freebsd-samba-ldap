@@ -1,0 +1,42 @@
+name: Container
+
+on:
+  - workflow_dispatch
+
+permissions:
+  packages: write
+
+jobs:
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build container images
+        uses: vmactions/freebsd-vm@v1
+        with:
+          usesh: true
+          sync: sshfs
+          copyback: false
+
+          prepare: |
+            sysctl net.inet.ip.forwarding=1
+
+            mkdir -p /usr/local/etc/pkg/repos
+            echo 'FreeBSD: { url: "pkg+https://pkg.freebsd.org/${ABI}/latest" }' > /usr/local/etc/pkg/repos/FreeBSD.conf
+            pkg install -y podman-suite qemu-user-static
+            service qemu_user_static onestart
+
+            sed -i '' -e 's/zfs/vfs/g' /usr/local/etc/containers/storage.conf
+            mkdir -p /var/db/containers/storage
+            buildah login -u ${{ github.actor }} -p ${{ github.token }} ghcr.io
+
+          run: |
+            for i in amd64; do
+              mkdir -p bin/$i
+              fetch -o- https://github.com/cynix/groundcontrol/releases/download/edge/groundcontrol-$(echo "$i" | sed -e 's/amd64/x86_64/' -e 's/arm64/aarch64/')-unknown-freebsd.tar.gz | tar -C bin/$i/ -zxf- --no-same-owner groundcontrol
+            done
+
+            buildah build --manifest=ghcr.io/cynix/samba-ldap:latest --network=host --platform=freebsd/amd64 --pull=always .
+            buildah manifest push --all ghcr.io/cynix/samba-ldap:latest docker://ghcr.io/cynix/samba-ldap:latest
